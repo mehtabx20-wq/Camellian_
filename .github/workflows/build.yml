@@ -1,1 +1,43 @@
 
+name: Build camellian kernel
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install packages
+        run: |
+          sudo apt update
+          sudo apt install -y bc bison flex libssl-dev libelf-dev zip gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: Get source and toolchain
+        run: |
+          git clone --depth=1 https://github.com/xiaomi-mt6833-dev/kernel_xiaomi_mt6833 kernel
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+
+      - name: Build
+        working-directory: kernel
+        run: |
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          DEF=$(ls arch/arm64/configs | grep -i -E 'camellia|mt6833' | head -n1)
+          echo "Using defconfig: $DEF"
+          ARGS="O=out ARCH=arm64 CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-"
+          make $ARGS "$DEF"
+          make -j$(nproc) $ARGS 2>&1 | tee build.log
+
+      - name: Package
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 ak
+          B=kernel/out/arch/arm64/boot
+          cp $B/Image.gz-dtb ak/ 2>/dev/null || cp $B/Image.gz ak/ 2>/dev/null || cp $B/Image ak/
+          find kernel/out/arch/arm64/boot/dts -name '*.dtb' -exec cp {} ak/ \; || true
+          sed -i 's#^block_device=.*#block_device=/dev/block/by-name/boot;#; s#^is_slot_device=.*#is_slot_device=0;#; s#^do.devicecheck=.*#do.devicecheck=0;#' ak/anykernel.sh
+          cd ak && zip -r ../camellian-kernel.zip . -x ".git*"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kernel-and-log
+          path: |
+            camellian-kernel.zip
+            kernel/build.log
